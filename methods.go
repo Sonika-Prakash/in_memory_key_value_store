@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"reflect"
+	"time"
 )
 
 func (s *store) get(key string) (*ValueObject, error) {
@@ -16,7 +17,7 @@ func (s *store) get(key string) (*ValueObject, error) {
 	}
 }
 
-func (s *store) put(key string, pairs map[string]AttrVal) error {
+func (s *store) put(key string, pairs map[string]AttrVal, expiry time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -31,17 +32,24 @@ func (s *store) put(key string, pairs map[string]AttrVal) error {
 	}
 	s.keys[key] = vo
 
+	if expiry > 0 {
+		go func() {
+			<-time.After(expiry)
+			s.scheduleEviction(key) // schedule this key for eviction after its expiration is reached
+		}()
+	}
+
 	return nil
 }
 
-func (s *store) search(attrKey string, attrVal AttrVal) []string {
+func (s *store) search(attrKey string, attrVal AttrVal) string {
 	res := make([]string, 0)
 	for k, valObj := range s.keys {
 		if currVal, ok := valObj.attributes[attrKey]; ok && reflect.DeepEqual(currVal, attrVal) {
 			res = append(res, k)
 		}
 	}
-	return res
+	return String(res)
 }
 
 func (s *store) delete(key string) {
@@ -51,10 +59,10 @@ func (s *store) delete(key string) {
 	delete(s.keys, key)
 }
 
-func (s *store) getKeys() []string {
+func (s *store) getKeys() string {
 	output := make([]string, 0)
 	for k := range s.keys {
 		output = append(output, k)
 	}
-	return output
+	return String(output)
 }

@@ -5,9 +5,10 @@
     
     This returns the value (object with attributes and their values). Returns error if the key is not found.
 
-- `put <key> <attributeKey1> <attributeValue1> <attributeKey2> <attributeValue2>....`
+- `put <key> <TTL> <attributeKey1> <attributeValue1> <attributeKey2> <attributeValue2>....`
     
     Adds tke key and the attributes to the key-value store. If the key already exists, then the value is replaced only if the data types of the attributes are maintained.
+    Set TTL in seconds (do not pass 0), and -1 if no TTL is needed, meaning the key never gets evicted automatically.
 
 - `delete <key>`
 

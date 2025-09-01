@@ -6,23 +6,53 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 func newStore() *store {
 	return &store{
-		keys: make(map[string]*ValueObject),
+		keys:             make(map[string]*ValueObject),
+		mu:               sync.RWMutex{},
+		maxEvictWaitTime: 2 * time.Second,
+		evictPool:        make(chan struct{}, 5),
 	}
 }
 
-func parseInput(line string) (string, string, map[string]AttrVal, error) {
+func (s *store) scheduleEviction(key string) {
+	select {
+	case s.evictPool <- struct{}{}:
+		// try to grab a slot for eviction via goroutine
+	case <-time.After(s.maxEvictWaitTime):
+		// max time to wait to grab a slot which is the key's expiry duration
+		// if no slot available, evict the key in the main thread itself without spawning a goroutine for it
+		s.evictKey(key)
+	}
+
+	// if slot is acquired, evict the key immediately using goroutine and free up this slot
+	go func() {
+		s.evictKey(key)
+		<-s.evictPool
+	}()
+}
+
+func (s *store) evictKey(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.keys, key)
+}
+
+func parseInput(line string) (string, string, map[string]AttrVal, time.Duration, error) {
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
-		return "", "", nil, fmt.Errorf("invalid input")
+		return "", "", nil, 0, fmt.Errorf("invalid input")
 	}
 
 	var cmd, key string
 	var attrStr []string
 	var attrs map[string]AttrVal
+	var keyExpiry time.Duration
 
 	cmd = parts[0]
 	switch cmd {
@@ -31,7 +61,9 @@ func parseInput(line string) (string, string, map[string]AttrVal, error) {
 		attrStr = nil
 	case "put":
 		key = parts[1]
-		attrStr = parts[2:]
+		attrStr = parts[3:]
+		seconds, _ := strconv.Atoi(parts[2])
+		keyExpiry = time.Duration(seconds) * time.Second
 	case "delete":
 		key = parts[1]
 		attrStr = nil
@@ -47,10 +79,10 @@ func parseInput(line string) (string, string, map[string]AttrVal, error) {
 		attrs = getAttributes(attrStr)
 	}
 
-	return strings.TrimSpace(cmd), strings.TrimSpace(key), attrs, nil
+	return strings.TrimSpace(cmd), strings.TrimSpace(key), attrs, keyExpiry, nil
 }
 
-func (s *store) execCmd(cmd string, key string, attrs map[string]AttrVal) {
+func (s *store) execCmd(cmd string, key string, attrs map[string]AttrVal, keyExpiry time.Duration) {
 	switch cmd {
 	case "get":
 		output, err := s.get(key)
@@ -60,7 +92,7 @@ func (s *store) execCmd(cmd string, key string, attrs map[string]AttrVal) {
 			fmt.Println(output.String())
 		}
 	case "put":
-		err := s.put(key, attrs)
+		err := s.put(key, attrs, keyExpiry)
 		if err != nil {
 			fmt.Println(err)
 		}
@@ -129,6 +161,19 @@ func (v *ValueObject) String() string {
 		}
 		first = false
 		sb.WriteString(fmt.Sprintf("%s: %v", k, v))
+	}
+	return sb.String()
+}
+
+func String(str []string) string {
+	var sb strings.Builder
+	first := true
+	for i := range str {
+		if !first {
+			sb.WriteString(", ")
+		}
+		first = false
+		sb.WriteString(fmt.Sprintf("%s", str[i]))
 	}
 	return sb.String()
 }
